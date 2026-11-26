@@ -35,7 +35,10 @@ from werkzeug.security import generate_password_hash
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE_PATH = os.environ.get("DATABASE_PATH") or os.path.join(BASE_DIR, "database.db")
-COURSE_CAPACITY = int(os.environ.get("COURSE_CAPACITY", "30"))
+try:
+    COURSE_CAPACITY = int(os.environ.get("COURSE_CAPACITY", "30"))
+except ValueError:
+    COURSE_CAPACITY = 30
 ALLOWED_STATUSES = ("Pending", "Approved", "Rejected", "Cancelled")
 
 app = Flask(__name__)
@@ -195,8 +198,14 @@ def init_db():
     connection.executescript(SCHEMA)
 
     def count(table):
-        return connection.execute("SELECT COUNT(*) AS total FROM " + table).fetchone()["total"]
+        allowed_tables = {"students", "courses", "enrollments", "announcements", "users"}
 
+if table not in allowed_tables:
+    raise ValueError("Invalid table name")
+
+return connection.execute(
+    f"SELECT COUNT(*) AS total FROM {table}"
+).fetchone()["total"]
     if count("students") == 0:
         connection.executemany(
             "INSERT INTO students (student_id, first_name, last_name, email, program,"
@@ -572,9 +581,15 @@ def enrollment_query(where="", args=None, limit=None):
     sql += " ORDER BY e.enrollment_id DESC"
     params = list(args or [])
     if limit:
-        sql += " LIMIT ?"
-        params.append(int(limit))
-    return query_all(sql, params)
+    try:
+        limit = int(limit)
+        if limit < 1:
+            return fail("Limit must be greater than 0.", 400)
+    except ValueError:
+        return fail("Invalid limit value.", 400)
+
+    sql += " LIMIT ?"
+    params.append(limit)
 
 
 @app.get("/api/enrollments")
@@ -599,14 +614,24 @@ def list_enrollments():
         args.append(status)
 
     student_pk = request.args.get("student_id")
-    if student_pk:
-        clauses.append("e.student_id = ?")
-        args.append(int(student_pk))
+if student_pk:
+    try:
+        student_pk = int(student_pk)
+    except ValueError:
+        return fail("Invalid student ID.", 400)
 
-    course_pk = request.args.get("course_id")
-    if course_pk:
-        clauses.append("e.course_id = ?")
-        args.append(int(course_pk))
+    clauses.append("e.student_id = ?")
+    args.append(student_pk)
+
+course_pk = request.args.get("course_id")
+if course_pk:
+    try:
+        course_pk = int(course_pk)
+    except ValueError:
+        return fail("Invalid course ID.", 400)
+
+    clauses.append("e.course_id = ?")
+    args.append(course_pk)
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     limit = request.args.get("limit")
@@ -694,8 +719,15 @@ def list_announcements():
     params = []
     limit = request.args.get("limit")
     if limit:
-        sql += " LIMIT ?"
-        params.append(int(limit))
+    try:
+        limit = int(limit)
+        if limit < 1:
+            return fail("Limit must be greater than 0.", 400)
+    except ValueError:
+        return fail("Invalid limit value.", 400)
+
+    sql += " LIMIT ?"
+    params.append(limit)
     return jsonify(query_all(sql, params))
 
 
@@ -812,7 +844,7 @@ init_db()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print("Campus Connect API running on http://127.0.0.1:" + str(port))
     print("Database file:", DATABASE_PATH)
     app.run(host="0.0.0.0", port=port, debug=debug)
